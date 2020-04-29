@@ -5,13 +5,14 @@
 import json
 import os
 from filecmp import cmp
+
 from lyricsgenius.utils import sanitize_filename
 
 
 class Song(object):
     """A song from the Genius.com database."""
 
-    def __init__(self, json_dict, lyrics=''):
+    def __init__(self, json_dict, lyrics=""):
         """ Song Constructor
 
         Properties:
@@ -24,66 +25,66 @@ class Song(object):
         Methods:
             save_lyrics: Save the song lyrics to a JSON or TXT file.
         """
-        self._body = json_dict['song'] if 'song' in json_dict else json_dict
-        self._body['lyrics'] = lyrics
-        self._url = self._body['url']
-        self._api_path = self._body['api_path']
-        self._id = self._body['id']
+        self._body = json_dict["song"] if "song" in json_dict else json_dict
+        self._body["lyrics"] = lyrics
+        self._url = self._body["url"]
+        self._api_path = self._body["api_path"]
+        self._id = self._body["id"]
 
     @property
     def title(self):
-        return self._body.get('title')
+        return self._body.get("title")
 
     @property
     def artist(self):
-        primary = self._body.get('primary_artist')
+        primary = self._body.get("primary_artist")
         if primary:
-            return primary.get('name')
+            return primary.get("name")
 
     @property
     def lyrics(self):
-        return self._body.get('lyrics')
+        return self._body.get("lyrics")
 
     @property
     def album(self):
-        album = self._body.get('album')
+        album = self._body.get("album")
         if album:
-            return album.get('name')
+            return album.get("name")
 
     @property
     def year(self):
-        return self._body.get('release_date')
+        return self._body.get("release_date")
 
     @property
     def url(self):
-        return self._body.get('url')
+        return self._body.get("url")
 
     @property
     def album_url(self):
-        album = self._body.get('album')
+        album = self._body.get("album")
         if album:
-            return album.get('url')
+            return album.get("url")
 
     @property
     def featured_artists(self):
-        return self._body.get('featured_artists')
+        return self._body.get("featured_artists")
 
     @property
     def producer_artists(self):
-      return self._body.get('producer_artists')
+        return self._body.get("producer_artists")
 
     @property
     def media(self):
-        return self._body.get('media')
+        return self._body.get("media")
 
     @property
     def writer_artists(self):
         """List of artists credited as writers"""
-        return self._body.get('writer_artists')
+        return self._body.get("writer_artists")
 
     @property
     def song_art_image_url(self):
-        return self._body.get('song_art_image_url')
+        return self._body.get("song_art_image_url")
 
     def to_dict(self):
         """
@@ -92,16 +93,17 @@ class Song(object):
 
         :return: Dictionary
         """
-        return dict({'title': self.title,
-                     'album': self.album,
-                     'year': self.year,
-                     'lyrics': self.lyrics,
-                     'image': self.song_art_image_url})
+        return dict(
+            {
+                "title": self.title,
+                "album": self.album,
+                "year": self.year,
+                "lyrics": self.lyrics,
+                "image": self.song_art_image_url,
+            }
+        )
 
-    def to_json(self,
-                filename=None,
-                full_data=True,
-                sanitize=True):
+    def to_json(self, filename=None, full_data=True, sanitize=True):
         """
         Convert the Song object to a json string.
         INPUT
@@ -122,14 +124,11 @@ class Song(object):
 
         # Save Song object to a json file
         filename = sanitize_filename(filename) if sanitize else filename
-        with open(filename, 'w') as ff:
+        with open(filename, "w") as ff:
             json.dump(data, ff, indent=1)
         return None
 
-    def to_text(self,
-                filename=None,
-                binary_encoding=False,
-                sanitize=True):
+    def to_text(self, filename=None, binary_encoding=False, sanitize=True):
         """Save the song lyrics as a text file.
         INPUT
         :filename: Output filename. If not specified, the result is
@@ -149,23 +148,27 @@ class Song(object):
 
         # Save song lyrics to a text file
         filename = sanitize_filename(filename) if sanitize else filename
-        with open(filename, 'wb' if binary_encoding else 'w') as ff:
+        with open(filename, "wb" if binary_encoding else "w") as ff:
             if binary_encoding:
-                data = data.encode('utf8')
+                data = data.encode("utf8")
             ff.write(data)
         return None
 
-    def save_lyrics(self,
-                    filename=None,
-                    extension='json',
-                    overwrite=None,
-                    binary_encoding=False,
-                    full_data=True,
-                    sanitize=True,
-                    verbose=True):
+    def save_lyrics(
+        self,
+        filename=None,
+        extension="json",
+        overwrite=None,
+        binary_encoding=False,
+        full_data=True,
+        sanitize=True,
+        verbose=True,
+    ):
         """Save Song lyrics and metadata to a JSON or TXT file."""
         extension = extension.lstrip(".").lower()
-        assert (extension == 'json') or (extension == 'txt'), "extension must be JSON or TXT"
+        assert (extension == "json") or (
+            extension == "txt"
+        ), "extension must be JSON or TXT"
 
         # Determine the filename
         if filename:
@@ -173,9 +176,9 @@ class Song(object):
                 filename = filename.replace("." + ext, "")
             filename += "." + extension
         else:
-            filename = "Lyrics_{}_{}.{}".format(self.artist.replace(" ", ""),
-                                                self.title.replace(" ", ""),
-                                                extension).lower()
+            filename = "Lyrics_{}_{}.{}".format(
+                self.artist.replace(" ", ""), self.title.replace(" ", ""), extension
+            ).lower()
         filename = sanitize_filename(filename) if sanitize else filename
 
         # Check if file already exists
@@ -183,23 +186,26 @@ class Song(object):
         if overwrite or not os.path.isfile(filename):
             write_file = True
         elif verbose:
-            if input("{} already exists. Overwrite?\n(y/n): ".format(filename)).lower() == 'y':
+            if (
+                input("{} already exists. Overwrite?\n(y/n): ".format(filename)).lower()
+                == "y"
+            ):
                 write_file = True
 
         # Exit if we won't be saving a file
         if not write_file:
             if verbose:
-                print('Skipping file save.\n')
+                print("Skipping file save.\n")
             return
 
         # Save the lyrics to a file
-        if extension == 'json':
+        if extension == "json":
             self.to_json(filename, full_data=full_data)
         else:
             self.to_text(filename, binary_encoding=binary_encoding)
 
         if verbose:
-            print('Wrote {} to {}.'.format(self.title, filename))
+            print("Wrote {} to {}.".format(self.title, filename))
         return None
 
     def __str__(self):
@@ -209,10 +215,15 @@ class Song(object):
         else:
             lyr = self.lyrics[:100]
         return '"{title}" by {artist}:\n    {lyrics}'.format(
-            title=self.title, artist=self.artist, lyrics=lyr.replace('\n', '\n    '))
+            title=self.title, artist=self.artist, lyrics=lyr.replace("\n", "\n    ")
+        )
 
     def __repr__(self):
         return repr((self.title, self.artist))
 
     def __cmp__(self, other):
-        return cmp(self.title, other.title) and cmp(self.artist, other.artist) and cmp(self.lyrics, other.lyrics)
+        return (
+            cmp(self.title, other.title)
+            and cmp(self.artist, other.artist)
+            and cmp(self.lyrics, other.lyrics)
+        )

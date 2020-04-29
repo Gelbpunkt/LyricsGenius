@@ -6,32 +6,36 @@
 API documentation: https://docs.genius.com/
 """
 
+import asyncio
+import json
 import os
 import re
-import requests
-from requests.exceptions import Timeout
-from urllib.parse import urlencode
 import shutil
-import json
-from bs4 import BeautifulSoup
-from string import punctuation
 import time
+from string import punctuation
+from urllib.parse import urlencode
 
-from lyricsgenius.song import Song
+import aiohttp
+from async_timeout import timeout
+
 from lyricsgenius.artist import Artist
+from lyricsgenius.song import Song
 
 
 class API(object):
     """Genius API"""
 
     # Create a persistent requests connection
-    _session = requests.Session()
-    _session.headers = {'application': 'LyricsGenius',
-       'User-Agent': 'https://github.com/johnwmillr/LyricsGenius'}
-    _SLEEP_MIN = 0.2  # Enforce minimum wait time between API calls (seconds)
+    _session = aiohttp.ClientSession(
+        headers={
+            "application": "LyricsGenius",
+            "User-Agent": "https://github.com/Gelbpunkt/LyricsGenius",
+        }
+    )
 
-    def __init__(self, client_access_token,
-                 response_format='plain', timeout=5, sleep_time=0.5):
+    def __init__(
+        self, client_access_token, response_format="plain", timeout=5
+    ):
         """ Genius API Constructor
 
         :param client_access_token: API key provided by Genius
@@ -41,48 +45,54 @@ class API(object):
         """
 
         self._ACCESS_TOKEN = client_access_token
-        self._session.headers['authorization'] = 'Bearer ' + self._ACCESS_TOKEN
         self.response_format = response_format.lower()
-        self.api_root = 'https://api.genius.com/'
-        self.timeout = timeout
-        self.sleep_time = sleep_time
+        self.api_root = "https://api.genius.com/"
+        self._session = aiohttp.ClientSession(
+            headers={
+                "application": "LyricsGenius",
+                "User-Agent": "https://github.com/Gelbpunkt/LyricsGenius",
+                "Authorization": f"Bearer {self._ACCESS_TOKEN}"
+            }
+        )
 
-    def _make_request(self, path, method='GET', params_={}):
+        self._timeout = timeout
+
+    async def _make_request(self, path, method="GET", params_={}):
         """Make a request to the API"""
         uri = self.api_root + path
-        params_['text_format'] = self.response_format
+        params_["text_format"] = self.response_format
 
         # Make the request
         response = None
         try:
-            response = self._session.request(method, uri,
-                                            timeout=self.timeout,
-                                            params=params_)
-        except Timeout as e:
+            async with timeout(self._timeout):
+                async with self._session.request(
+                    method, uri, params=params_,
+                ) as req:
+                    if req.status == 200:
+                        return (await req.json())["response"]
+        except asyncio.TimeoutError as e:
             print("Timeout raised and caught:\n{e}".format(e=e))
 
-        # Enforce rate limiting
-        time.sleep(max(self._SLEEP_MIN, self.sleep_time))
-        return response.json()['response'] if response else None
-
-    def get_song(self, id_):
+    async def get_song(self, id_):
         """Data for a specific song."""
         endpoint = "songs/{id}".format(id=id_)
-        return self._make_request(endpoint)
+        return await self._make_request(endpoint)
 
-    def get_artist(self, id_):
+    async def get_artist(self, id_):
         """Data for a specific artist."""
         endpoint = "artists/{id}".format(id=id_)
-        return self._make_request(endpoint)
+        return await self._make_request(endpoint)
 
-    def get_artist_songs(self, id_, sort='title', per_page=20, page=1):
+    async def get_artist_songs(self, id_, sort="title", per_page=20, page=1):
         """Documents (songs) for the artist specified."""
         endpoint = "artists/{id}/songs".format(id=id_)
-        params = {'sort': sort, 'per_page': per_page, 'page': page}
-        return self._make_request(endpoint, params_=params)
+        params = {"sort": sort, "per_page": per_page, "page": page}
+        return await self._make_request(endpoint, params_=params)
 
-    def get_referents(self, song_id=None, web_page_id=None,
-                      created_by_id=None, per_page=20, page=1):
+    async def get_referents(
+        self, song_id=None, web_page_id=None, created_by_id=None, per_page=20, page=1
+    ):
         """Get song's referents"""
         msg = "Must supply `song_id`, `web_page_id`, or `created_by_id`."
         assert any([song_id, web_page_id, created_by_id]), msg
@@ -92,20 +102,24 @@ class API(object):
 
         # Construct the URI
         endpoint = "referents?"
-        params = {'song_id': song_id, 'web_page_id': web_page_id,
-                  'created_by_id': created_by_id,
-                  'per_page': per_page, 'page':page}
-        return self._make_request(endpoint, params_=params)
+        params = {
+            "song_id": song_id,
+            "web_page_id": web_page_id,
+            "created_by_id": created_by_id,
+            "per_page": per_page,
+            "page": page,
+        }
+        return await self._make_request(endpoint, params_=params)
 
-    def get_annotation(self, id_):
+    async def get_annotation(self, id_):
         """Data for a specific annotation."""
         endpoint = "annotations/{id}".format(id=id_)
-        return self._make_request(endpoint)
+        return await self._make_request(endpoint)
 
-    def get_song_annotations(self, song_id):
+    async def get_song_annotations(self, song_id):
         """Return song's annotations with associated fragment in list of tuple."""
-        referents = self.get_referents(song_id=song_id)["referents"]
-        all_annotations = [] # list of tuples(fragment, annotations[])
+        referents = (await self.get_referents(song_id=song_id))["referents"]
+        all_annotations = []  # list of tuples(fragment, annotations[])
         for r in referents:
             fragment = r["fragment"]
             annotations = []
@@ -114,32 +128,38 @@ class API(object):
             all_annotations.append((fragment, annotations))
         return all_annotations
 
-    def search_genius(self, search_term):
+    async def search_genius(self, search_term):
         """Search documents hosted on Genius."""
         endpoint = "search/"
-        params = {'q': search_term}
-        return self._make_request(endpoint, params_=params)
+        params = {"q": search_term}
+        return await self._make_request(endpoint, params_=params)
 
-    def search_genius_web(self, search_term, per_page=5):
+    async def search_genius_web(self, search_term, per_page=5):
         """Use the web-version of Genius search"""
-        endpoint = "search/multi?"
-        params = {'per_page': per_page, 'q': search_term}
-
-        # This endpoint is not part of the API, requires different formatting
-        url = "https://genius.com/api/" + endpoint + urlencode(params)
-        response = requests.get(url, timeout=self.timeout)
-        time.sleep(max(self._SLEEP_MIN, self.sleep_time))
-        return response.json()['response'] if response else None
+        params = {"per_page": per_page, "q": search_term}
+        async with timeout(self._timeout):
+            async with self._session.get("https://genius.com/api/search/multi", params=params) as req:
+                print(self._session._default_headers)
+                print(req.headers)
+                print(await req.json())
+                if req.status == 200:
+                    return (await req.json())["reponse"]
 
 
 class Genius(API):
     """User-level interface with the Genius.com API."""
 
-    def __init__(self, client_access_token,
-                 response_format='plain', timeout=5, sleep_time=0.5,
-                 verbose=True, remove_section_headers=False,
-                 skip_non_songs=True, excluded_terms=[],
-                 replace_default_terms=False):
+    def __init__(
+        self,
+        client_access_token,
+        response_format="plain",
+        timeout=5,
+        verbose=True,
+        remove_section_headers=False,
+        skip_non_songs=True,
+        excluded_terms=[],
+        replace_default_terms=False,
+    ):
         """ Genius Client Constructor
 
         :param verbose: Turn printed messages on or off (bool)
@@ -149,39 +169,45 @@ class Genius(API):
         :param replace_default_terms: if True, replaces default excluded terms with user's
         """
 
-        super().__init__(client_access_token, response_format, timeout, sleep_time)
+        super().__init__(client_access_token, response_format, timeout)
         self.verbose = verbose
         self.remove_section_headers = remove_section_headers
         self.skip_non_songs = skip_non_songs
         self.excluded_terms = excluded_terms
         self.replace_default_terms = replace_default_terms
 
-    def _scrape_song_lyrics_from_url(self, url):
+    async def _scrape_song_lyrics_from_url(self, url):
         """ Use BeautifulSoup to scrape song info off of a Genius song URL
         :param url: URL for the web page to scrape lyrics from
         """
-        page = requests.get(url)
-        if page.status_code == 404:
-            return None
+        async with self._session.get(url) as req:
+            if req.status == 404:
+                return None
 
+            text = await req.text()
+        print(text)
         # Scrape the song lyrics from the HTML
-        html = BeautifulSoup(page.text, "html.parser")
-        div = html.find("div", class_="lyrics")
+        # div class=lyrics
         if not div:
-            return None # Sometimes the lyrics section isn't found
+            return None  # Sometimes the lyrics section isn't found
 
         # Scrape lyrics if proper section was found on page
         lyrics = div.get_text()
         if self.remove_section_headers:  # Remove [Verse], [Bridge], etc.
-            lyrics = re.sub('(\[.*?\])*', '', lyrics)
-            lyrics = re.sub('\n{2}', '\n', lyrics)  # Gaps between verses
+            lyrics = re.sub("(\[.*?\])*", "", lyrics)
+            lyrics = re.sub("\n{2}", "\n", lyrics)  # Gaps between verses
         return lyrics.strip("\n")
 
     def _clean_str(self, s):
         """ Returns a lowercase string with punctuation and bad chars removed
         :param s: string to clean
         """
-        return s.translate(str.maketrans('', '', punctuation)).replace('\u200b', " ").strip().lower()
+        return (
+            s.translate(str.maketrans("", "", punctuation))
+            .replace("\u200b", " ")
+            .strip()
+            .lower()
+        )
 
     def _result_is_lyrics(self, song_title):
         """ Returns False if result from Genius is not actually song lyrics
@@ -189,48 +215,62 @@ class Genius(API):
             instance variables within the Genius class.
         """
 
-        default_terms = ['track\\s?list', 'album art(work)?', 'liner notes',
-                         'booklet', 'credits', 'interview', 'skit',
-                         'instrumental', 'setlist']
+        default_terms = [
+            "track\\s?list",
+            "album art(work)?",
+            "liner notes",
+            "booklet",
+            "credits",
+            "interview",
+            "skit",
+            "instrumental",
+            "setlist",
+        ]
         if self.excluded_terms:
             if self.replace_default_terms:
                 default_terms = self.excluded_terms
             else:
                 default_terms.extend(self.excluded_terms)
 
-        expression = r"".join(["({})|".format(term) for term in default_terms]).strip('|')
+        expression = r"".join(["({})|".format(term) for term in default_terms]).strip(
+            "|"
+        )
         regex = re.compile(expression, re.IGNORECASE)
         return not regex.search(self._clean_str(song_title))
 
     def _get_item_from_search_response(self, response, search_term, type_, result_type):
         """ Returns either a Song or Artist result from search_genius_web """
         # Convert list to dictionary
-        hits = response['sections'][0]['hits']
+        hits = response["sections"][0]["hits"]
         if hits:
             tophit = hits[0]
         # Check rest of results if top hit wasn't the search type
-        sections = sorted(response['sections'],
-                          key=lambda sect: sect['type'] == type_,
-                          reverse=True)
-        
-        hits =[hit for section in sections for hit in section['hits'] if hit['type'] == type_]
-        for hit in hits:
-            if hit['result'][result_type] == search_term:
-                return hit['result']
-        
-        return hits[0]['result'] if hits else None
+        sections = sorted(
+            response["sections"], key=lambda sect: sect["type"] == type_, reverse=True
+        )
 
+        hits = [
+            hit
+            for section in sections
+            for hit in section["hits"]
+            if hit["type"] == type_
+        ]
+        for hit in hits:
+            if hit["result"][result_type] == search_term:
+                return hit["result"]
+
+        return hits[0]["result"] if hits else None
 
     def _result_is_match(self, result, title, artist=None):
         """ Returns True if search result matches searched song """
-        result_title = self._clean_str(result['title'])
+        result_title = self._clean_str(result["title"])
         title_is_match = result_title == self._clean_str(title)
         if not artist:
             return title_is_match
-        result_artist = self._clean_str(result['primary_artist']['name'])
+        result_artist = self._clean_str(result["primary_artist"]["name"])
         return title_is_match and result_artist == self._clean_str(artist)
 
-    def search_song(self, title, artist="", get_full_info=True):
+    async def search_song(self, title, artist="", get_full_info=True):
         """ Search Genius.com for lyrics to a specific song
         :param title: Song title to search for
         :param artist: Name of the artist
@@ -243,10 +283,12 @@ class Genius(API):
             else:
                 print('Searching for "{s}"...'.format(s=title))
         search_term = "{s} {a}".format(s=title, a=artist).strip()
-        response = self.search_genius_web(search_term)
+        response = await self.search_genius_web(search_term)
 
         # Otherwise, move forward with processing the search results
-        result = self._get_item_from_search_response(response, title, type_="song", result_type = "title")
+        result = self._get_item_from_search_response(
+            response, title, type_="song", result_type="title"
+        )
 
         # Exit search if there were no results returned from API
         if not result:
@@ -255,35 +297,42 @@ class Genius(API):
             return None
 
         # Reject non-songs (Liner notes, track lists, etc.)
-        valid = self._result_is_lyrics(result['title']) if self.skip_non_songs else True
+        valid = self._result_is_lyrics(result["title"]) if self.skip_non_songs else True
         if not valid:
             if self.verbose:
-                print('Specified song does not contain lyrics. Rejecting.')
+                print("Specified song does not contain lyrics. Rejecting.")
             return None
 
         # Download full song info (an API call) unless told not to by user
         song_info = result.copy()
         if get_full_info:
-            song_info.update(self.get_song(result['id'])['song'])
-        lyrics = self._scrape_song_lyrics_from_url(song_info['url'])
+            song_info.update(self.get_song(result["id"])["song"])
+        lyrics = await self._scrape_song_lyrics_from_url(song_info["url"])
 
         # Skip results when URL is a 404 or lyrics are missing
         if not lyrics:
             if self.verbose:
-                print('Specified song does not have a valid URL with lyrics. Rejecting.')
+                print(
+                    "Specified song does not have a valid URL with lyrics. Rejecting."
+                )
             return None
 
         # Return a Song object with lyrics if we've made it this far
         song = Song(song_info, lyrics)
         if self.verbose:
-            print('Done.')
+            print("Done.")
         return song
 
-    def search_artist(self, artist_name, max_songs=None,
-                      sort='popularity', per_page=20,
-                      get_full_info=True,
-                      allow_name_change=True,
-                      artist_id=None):
+    async def search_artist(
+        self,
+        artist_name,
+        max_songs=None,
+        sort="popularity",
+        per_page=20,
+        get_full_info=True,
+        allow_name_change=True,
+        artist_id=None,
+    ):
         """Search Genius.com for songs by the specified artist.
         Returns an Artist object containing artist's songs.
         :param artist_name: Name of the artist to search for
@@ -295,14 +344,17 @@ class Genius(API):
                                   switch to intended artist name.
         :param artist_id: Allows user to pass a Genius.com artist ID.
         """
-        def find_artist_id(search_term):
+
+        async def find_artist_id(search_term):
             if self.verbose:
-                print('Searching for songs by {0}...\n'.format(search_term))
+                print("Searching for songs by {0}...\n".format(search_term))
 
             # Perform a Genius API search for the artist
             found_artist = None
-            response = self.search_genius_web(search_term)
-            found_artist = self._get_item_from_search_response(response, search_term, type_="artist", result_type="name")
+            response = await self.search_genius_web(search_term)
+            found_artist = self._get_item_from_search_response(
+                response, search_term, type_="artist", result_type="name"
+            )
 
             # Exit the search if we couldn't find an artist by the given name
             if not found_artist:
@@ -310,15 +362,15 @@ class Genius(API):
                     print("No results found for '{a}'.".format(a=search_term))
                 return None
             # Assume the top search result is the intended artist
-            return found_artist['id']
+            return found_artist["id"]
 
         # Get the artist ID (or use the one supplied)
-        artist_id = artist_id if artist_id else find_artist_id(artist_name)
+        artist_id = artist_id if artist_id else await find_artist_id(artist_name)
         if artist_id == None:
             return None
 
         artist_info = self.get_artist(artist_id)
-        found_name = artist_info['artist']['name']
+        found_name = artist_info["artist"]["name"]
         if found_name != artist_name and allow_name_change:
             if self.verbose:
                 print("Changing artist name to '{a}'".format(a=found_name))
@@ -330,50 +382,53 @@ class Genius(API):
         page = 1
         reached_max_songs = False
         while not reached_max_songs:
-            songs_on_page = self.get_artist_songs(artist_id, sort, per_page, page)
-        
+            songs_on_page = await self.get_artist_songs(artist_id, sort, per_page, page)
+
             # Loop through each song on page of search results
-            for song_info in songs_on_page['songs']:
+            for song_info in songs_on_page["songs"]:
                 # Check if song is valid (e.g. has title, contains lyrics)
-                has_title = ('title' in song_info)
-                has_lyrics = self._result_is_lyrics(song_info['title'])
+                has_title = "title" in song_info
+                has_lyrics = self._result_is_lyrics(song_info["title"])
                 valid = has_title and (has_lyrics or (not self.skip_non_songs))
 
                 # Reject non-song results (e.g. Linear Notes, Tracklists, etc.)
                 if not valid:
                     if self.verbose:
-                        s = song_info['title'] if has_title else "MISSING TITLE"
+                        s = song_info["title"] if has_title else "MISSING TITLE"
                         print('"{s}" is not valid. Skipping.'.format(s=s))
                     continue
 
                 # Create the Song object from lyrics and metadata
-                lyrics = self._scrape_song_lyrics_from_url(song_info['url'])
+                lyrics = await self._scrape_song_lyrics_from_url(song_info["url"])
                 if get_full_info:
-                    info = self.get_song(song_info['id'])
+                    info = self.get_song(song_info["id"])
                 else:
-                    info = {'song': song_info}
+                    info = {"song": song_info}
                 song = Song(info, lyrics)
 
                 # Attempt to add the Song to the Artist
                 result = artist.add_song(song, verbose=False)
                 if result == 0 and self.verbose:
-                    print('Song {n}: "{t}"'.format(n=artist.num_songs,
-                                                   t=song.title))
+                    print('Song {n}: "{t}"'.format(n=artist.num_songs, t=song.title))
 
                 # Exit search if the max number of songs has been met
                 reached_max_songs = max_songs and artist.num_songs >= max_songs
                 if reached_max_songs:
                     if self.verbose:
-                        print('\nReached user-specified song limit ({m}).'.format(m=max_songs))
+                        print(
+                            "\nReached user-specified song limit ({m}).".format(
+                                m=max_songs
+                            )
+                        )
                     break
 
             # Move on to next page of search results
-            page = songs_on_page['next_page']
+            page = songs_on_page["next_page"]
             if page is None:
                 break  # Exit search when last page is reached
 
         if self.verbose:
-            print('Done. Found {n} songs.'.format(n=artist.num_songs))
+            print("Done. Found {n} songs.".format(n=artist.num_songs))
         return artist
 
     def save_artists(self, artists, filename="artist_lyrics", overwrite=False):
@@ -387,7 +442,7 @@ class Genius(API):
 
         # Create a temporary directory for lyrics
         start = time.time()
-        tmp_dir = 'tmp_lyrics'
+        tmp_dir = "tmp_lyrics"
         if not os.path.isdir(tmp_dir):
             os.mkdir(tmp_dir)
             count = 0
@@ -403,19 +458,18 @@ class Genius(API):
                 return
 
         # Extract each artist's lyrics in json format
-        all_lyrics = {'artists': []}
+        all_lyrics = {"artists": []}
         for n, artist in enumerate(artists):
             if isinstance(artist, Artist):
-                all_lyrics['artists'].append({})
-                f = "tmp_{n}_{a}".format(n=count + n,
-                                         a=artist.name.replace(" ", ""))
+                all_lyrics["artists"].append({})
+                f = "tmp_{n}_{a}".format(n=count + n, a=artist.name.replace(" ", ""))
                 tmp_file = os.path.join(tmp_dir, f)
                 if self.verbose:
                     print(tmp_file)
-                all_lyrics['artists'][-1] = artist.save_lyrics(overwrite=True)
+                all_lyrics["artists"][-1] = artist.save_lyrics(overwrite=True)
 
         # Save all of the lyrics
-        with open(filename + '.json', 'w') as outfile:
+        with open(filename + ".json", "w") as outfile:
             json.dump(all_lyrics, outfile)
 
         # Delete the temporary directory
