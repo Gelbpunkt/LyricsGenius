@@ -212,7 +212,6 @@ class Genius(API):
             Set the `excluded_terms` and `replace_default_terms` as
             instance variables within the Genius class.
         """
-        return True
         default_terms = [
             "track\\s?list",
             "album art(work)?",
