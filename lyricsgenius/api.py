@@ -25,17 +25,7 @@ from lyricsgenius.song import Song
 class API(object):
     """Genius API"""
 
-    # Create a persistent requests connection
-    _session = aiohttp.ClientSession(
-        headers={
-            "application": "LyricsGenius",
-            "User-Agent": "https://github.com/Gelbpunkt/LyricsGenius",
-        }
-    )
-
-    def __init__(
-        self, client_access_token, response_format="plain", timeout=5
-    ):
+    def __init__(self, client_access_token, response_format="plain", timeout=5):
         """ Genius API Constructor
 
         :param client_access_token: API key provided by Genius
@@ -51,7 +41,6 @@ class API(object):
             headers={
                 "application": "LyricsGenius",
                 "User-Agent": "https://github.com/Gelbpunkt/LyricsGenius",
-                "Authorization": f"Bearer {self._ACCESS_TOKEN}"
             }
         )
 
@@ -67,7 +56,10 @@ class API(object):
         try:
             async with timeout(self._timeout):
                 async with self._session.request(
-                    method, uri, params=params_,
+                    method,
+                    uri,
+                    params=params_,
+                    headers={"Authorization": f"Bearer {self._ACCESS_TOKEN}"},
                 ) as req:
                     if req.status == 200:
                         return (await req.json())["response"]
@@ -138,12 +130,11 @@ class API(object):
         """Use the web-version of Genius search"""
         params = {"per_page": per_page, "q": search_term}
         async with timeout(self._timeout):
-            async with self._session.get("https://genius.com/api/search/multi", params=params) as req:
-                print(self._session._default_headers)
-                print(req.headers)
-                print(await req.json())
+            async with self._session.get(
+                "https://genius.com/api/search/multi", params=params
+            ) as req:
                 if req.status == 200:
-                    return (await req.json())["reponse"]
+                    return (await req.json())["response"]
 
 
 class Genius(API):
@@ -185,14 +176,21 @@ class Genius(API):
                 return None
 
             text = await req.text()
-        print(text)
         # Scrape the song lyrics from the HTML
-        # div class=lyrics
+        div = re.findall(
+            r"<div class=\"lyrics\">(.+?(?=</div>$|$))</div>",
+            text,
+            flags=re.DOTALL | re.MULTILINE,
+        )
         if not div:
             return None  # Sometimes the lyrics section isn't found
-
         # Scrape lyrics if proper section was found on page
-        lyrics = div.get_text()
+        lyrics = "\n".join(
+            [
+                l.strip()
+                for l in re.sub(r"<.*?>", "", div[0], flags=re.DOTALL).split("\n")
+            ]
+        )
         if self.remove_section_headers:  # Remove [Verse], [Bridge], etc.
             lyrics = re.sub("(\[.*?\])*", "", lyrics)
             lyrics = re.sub("\n{2}", "\n", lyrics)  # Gaps between verses
@@ -214,7 +212,7 @@ class Genius(API):
             Set the `excluded_terms` and `replace_default_terms` as
             instance variables within the Genius class.
         """
-
+        return True
         default_terms = [
             "track\\s?list",
             "album art(work)?",
@@ -306,7 +304,7 @@ class Genius(API):
         # Download full song info (an API call) unless told not to by user
         song_info = result.copy()
         if get_full_info:
-            song_info.update(self.get_song(result["id"])["song"])
+            song_info.update((await self.get_song(result["id"]))["song"])
         lyrics = await self._scrape_song_lyrics_from_url(song_info["url"])
 
         # Skip results when URL is a 404 or lyrics are missing
@@ -369,7 +367,7 @@ class Genius(API):
         if artist_id == None:
             return None
 
-        artist_info = self.get_artist(artist_id)
+        artist_info = await self.get_artist(artist_id)
         found_name = artist_info["artist"]["name"]
         if found_name != artist_name and allow_name_change:
             if self.verbose:
@@ -401,7 +399,7 @@ class Genius(API):
                 # Create the Song object from lyrics and metadata
                 lyrics = await self._scrape_song_lyrics_from_url(song_info["url"])
                 if get_full_info:
-                    info = self.get_song(song_info["id"])
+                    info = await self.get_song(song_info["id"])
                 else:
                     info = {"song": song_info}
                 song = Song(info, lyrics)
